@@ -47,17 +47,16 @@ public final class ConnectionPool {
     private final DbPoolConfig cfg;
     private final ConnectionFactory factory;
     private final ConnectionValidator validator;
-
     private final BlockingQueue<Connection> available;
+
     private final AtomicInteger createdNow = new AtomicInteger(0);
     private final AtomicInteger inUse = new AtomicInteger(0);
-
     private final PoolMetrics metrics = new PoolMetrics();
 
     private final AtomicLong idSeq = new AtomicLong(0);
     private final ConcurrentHashMap<Connection, Long> connIds = new ConcurrentHashMap<>();
 
-    private final boolean logEvents = true;
+    private final boolean logEvents = false;
 
     private ConnectionPool(DbPoolConfig cfg) throws SQLException {
         this.cfg = cfg;
@@ -84,6 +83,7 @@ public final class ConnectionPool {
 
     private Connection newPhysicalConnection(boolean onDemand) throws SQLException {
         int current = createdNow.incrementAndGet();
+
         if (current > cfg.maxSize) {
             createdNow.decrementAndGet();
             throw new SQLException("Se alcanzó maxSize del pool: " + cfg.maxSize);
@@ -129,23 +129,22 @@ public final class ConnectionPool {
 
     public Connection acquire() throws SQLException {
         metrics.borrowed.incrementAndGet();
-        Duration t = cfg.acquireTimeout;
+        Duration timeout = cfg.acquireTimeout;
+        long start = System.nanoTime();
 
         try {
-            Connection physical = available.poll(t.toMillis(), TimeUnit.MILLISECONDS);
+            Connection physical = available.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
 
             if (physical != null) {
                 metrics.reused.incrementAndGet();
-                long id = idOf(physical);
                 if (logEvents) {
-                    log("BORROW", id, "reused");
+                    log("BORROW", idOf(physical), "reused");
                 }
             } else {
                 if (createdNow.get() < cfg.maxSize) {
                     physical = newPhysicalConnection(true);
-                    long id = idOf(physical);
                     if (logEvents) {
-                        log("BORROW", id, "new");
+                        log("BORROW", idOf(physical), "new");
                     }
                 } else {
                     metrics.timeouts.incrementAndGet();
@@ -157,15 +156,19 @@ public final class ConnectionPool {
             }
 
             if (!validator.isValid(physical)) {
-                long id = idOf(physical);
                 if (logEvents) {
-                    log("INVALID", id, "replacing");
+                    log("INVALID", idOf(physical), "replacing");
                 }
                 closePhysical(physical);
                 physical = newPhysicalConnection(true);
             }
 
-            inUse.incrementAndGet();
+            long waitNanos = System.nanoTime() - start;
+            metrics.recordAcquireWait(waitNanos);
+
+            int currentInUse = inUse.incrementAndGet();
+            metrics.updatePeakInUse(currentInUse);
+
             return proxyConnection(physical);
 
         } catch (InterruptedException e) {

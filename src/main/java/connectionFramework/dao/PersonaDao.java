@@ -69,7 +69,7 @@ public class PersonaDao {
     }
 
     public String list() throws SQLException {
-        String sql = "SELECT id, nombre, edad FROM persona ORDER BY id";
+        String sql = "SELECT id, nombre, edad FROM persona ORDER BY id LIMIT 100";
 
         StringBuilder sb = new StringBuilder("OK|");
 

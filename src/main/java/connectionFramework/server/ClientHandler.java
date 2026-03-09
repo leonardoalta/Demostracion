@@ -11,31 +11,41 @@ public class ClientHandler implements Runnable {
 
     private final Socket socket;
     private final PersonaDao dao;
+    private final ServerRequestMetrics metrics;
 
-    public ClientHandler(Socket socket) {
+    public ClientHandler(Socket socket, ServerRequestMetrics metrics) {
         this.socket = socket;
         this.dao = new PersonaDao();
+        this.metrics = metrics;
     }
 
     @Override
     public void run() {
-        System.out.println("Cliente conectado desde: " + socket.getInetAddress().getHostAddress());
+        long start = System.nanoTime();
 
         try (
                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 PrintWriter out = new PrintWriter(socket.getOutputStream(), true)
         ) {
             String request = in.readLine();
+
             if (request == null || request.isBlank()) {
                 out.println("ERROR|Petición vacía");
+                metrics.recordFailure(System.nanoTime() - start);
                 return;
             }
 
             String response = process(request);
             out.println(response);
 
+            if (response.startsWith("OK|")) {
+                metrics.recordSuccess(System.nanoTime() - start);
+            } else {
+                metrics.recordFailure(System.nanoTime() - start);
+            }
+
         } catch (Exception e) {
-            System.out.println("Error atendiendo cliente: " + e.getMessage());
+            metrics.recordFailure(System.nanoTime() - start);
         } finally {
             try {
                 socket.close();
